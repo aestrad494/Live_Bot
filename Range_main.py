@@ -83,7 +83,7 @@ valid_hour = False
 
 #Instantiating Ranguito and IB
 ranguito = Ranguito(inst,type_con,num_bars,tempo,target,hora_ini,hora_fin,client)
-ib = IB()
+ib =IB()
 
 # Connection to IB
 print(ib.connect(host='127.0.0.1',port=7497,clientId=client))
