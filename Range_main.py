@@ -1,338 +1,216 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# Importing Libraries
+# Range Bot
+## Importing Libraries
+from datetime import datetime, timedelta
 from ib_insync import *
-#util.startLoop()
 import pandas as pd
-import numpy as np
-import datetime
-import calendar
-import time
-from IPython.display import clear_output
+from math import floor
 import threading
-from nested_lookup import nested_lookup
+from time import sleep
 from apscheduler.schedulers.background import BackgroundScheduler
-import asyncio
-import pytz
-import smtplib
-import math
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import asyncio
-util.patchAsyncio()
+from nested_lookup import nested_lookup
 from Range_class import Ranguito
+util.patchAsyncio()
 
-#  Instance Variables
-inst =  input('\tInstrument: ') #'ES'               'EURUSD'  
-type_con = 'stock'#input('\tContract type: ') #'future'        'forex'
-num_bars = 1 #int(input('\tNumber of bars: ')) #1              1
-tempo = 1 #int(input('\tTemporality: ')) #5                 1
-target = float(input('\tTarget: ')) #0.80             0.00015
-hora_ini = "09:30:00"   #input('\tInitial Hour: ') #'15:40:00'     
-hora_fin = "15:30:00"    #input('\tFinal Hour: ') #'18:48:00'     
-client = int(input('\tClient ID: ')) #3 
-
-tick_val = 0
-#Code variables
-if type_con == 'forex':
-    tick_val = 0.00001
-    digits = 5
-if (type_con == 'stock') or (type_con == 'future'):
-    tick_val = 0.01
-    digits = 2
+## Input variables
+initial_hour = '16:49:00'
+final_hour = '16:52:00'
+client = 5
+instrument = 'EURUSD'
+temporality = 1
+num_bars = 1
+target = 0.00015
+type_con = 'forex'
 
 account = 20000
-risk = 0.001
+risk = 0.01
 mail_1 = "aestrad494@gmail.com"
 mail_2 = "ibpy.notifications@gmail.com"
 mails = [mail_2]#, mail_2]
-obj_ticks = float(target)/tick_val
 
-maxi = 0                  #maximum price of the range
-mini = 0                  #minimum price of the price
-lots = 0                  #Lots quantity
-buys = 0                  #number of total opened buys
-sells = 0                 #number of total opened sells
-entry_price_b = 0         #entry price of buy operations
-entry_price_s = 0         #entry price of sell operations
-profit_buy = 0            #current profit of buy operations
-profit_sell = 0           #current profit of sell operations
-exit_price_b = 0          #exit price of buy operations
-exit_price_s = 0          #exit price of sell operations
-commission_entry_buy = 0  #commission of entry buy
-commission_entry_sell = 0 #commission of entry sell
-commission_exit_buy = 0   #commission of exit buy
-commission_exit_sell = 0  #commission of exit sell
-id_buy_exit = 0
-id_sell_exit = 0
-weekday = ''
-margin_buy = 0
-margin_sell = 0
+## Initializing variables
+entry_price_b = 0
+entry_price_s = 0
+exit_price_b = 0
+exit_price_s = 0
+mail_buy_entry = False
+mail_sell_entry = False
+mail_buy_exit = False
+mail_sell_exit = False
+buy_closed_by_time = False
+sell_closed_by_time = False
 
-range_calcu = False     #flag that indicates if range has been calculated
-mail_buy_entry = True   #flag that indicates if an email for buy entry has been sent
-mail_sell_entry = True  #flag that indicates if an email for sell entry has been sent
-mail_buy_exit = True    #flag that indicates if an email for buy exit has been sent
-mail_sell_exit = True   #flag that indicates if an email for sell exit has been sent
-hist_update = False
-b_sells = False
-b_buys = False
-cancel_orders = False
-valid_day = False
-valid_hour = False
+## Calculating hour and weekday
+def calc_times():
+    global date, hour, weekday
+    date, hour, weekday = ranguito.day_and_hour()
 
-#Instantiating Ranguito and IB
-ranguito = Ranguito(inst,type_con,num_bars,tempo,target,hora_ini,hora_fin,client)
-ib =IB()
-
-# Connection to IB
-print(ib.connect(host='127.0.0.1',port=7497,clientId=client))
-
-#Contract Creation
-#contract = Stock(inst, 'SMART', 'USD')
-contract = Forex('EURUSD')
-
-# Function that returns current date, hour and week day
-def times():
-    try:
-        global today, hour, weekday
-        today, hour, weekday = ranguito.day_and_hour()
-    except:
-        pass
-    
-# Function that allows or not doing trading
+## Allowing Trading
 def allowing_trading():
-    try:
-        global valid_day, valid_hour
-        valid_day = ranguito.allow_trading_by_day(weekday)
-        valid_hour = ranguito.allow_trading_by_hour(hour, weekday)
-    except:
-        pass
+    global allow_trading
+    allow_trading = ranguito.allow_trading(hour,weekday)
 
-# Downloading Historical Data
-histo = ranguito.download_data(ib,contract)
-hist = util.df(histo)
-hist = hist.reset_index()
-hist = hist.set_index('date')
-hist = hist[['open', 'high', 'low', 'close']]
+## Instantiating Classes
+ib = IB()
+ranguito = Ranguito(instrument,type_con,num_bars,temporality,target,initial_hour,final_hour,client)
 
-# Function that transforms Historical Data in DataFrame
-def convert_historical():
-    global hist
-    global hist_update
-    hist = util.df(histo)
-    hist = hist.reset_index()
-    hist = hist.set_index('date')
-    hist = hist[['open', 'high', 'low', 'close']]
-    hist_update = True
-    return(hist)
+## Ib Connection
+print(ib.connect('127.0.0.1',7497,client))
 
-# Getting hour to calculate the range
-[h_i, m_i, s_i] = hora_ini.split(":")
-h_i = int(h_i)
-m_i = int(m_i)
+## Contract Creation
+contract = Forex(instrument)
 
-hour_exe = str(datetime.timedelta(hours=h_i, minutes=m_i) + datetime.timedelta(minutes=num_bars*tempo))
-hour_range = str(datetime.timedelta(hours=h_i, minutes=m_i) + datetime.timedelta(minutes=num_bars*tempo - tempo))
+## Download Historical
+historical_0 = ranguito.download_data(ib, contract)
+historical = util.df(historical_0).set_index('date')
+historical.drop(['volume','average','barCount'], axis = 1, inplace = True)
 
-# Function that calculates the maximum and minimum of the range
-def calc_range():
-    global maxi, mini 
-    global range_calcu
-    
-    try:
-        if (valid_day == True) and (valid_hour == True):
-            hour_d = datetime.datetime.strptime(hour, '%H:%M:%S')
-            hour_exe_d = datetime.datetime.strptime(hour_exe, '%H:%M:%S')
-            if (hour_d > hour_exe_d) and (range_calcu == False):
-                maxi,mini = ranguito.max_and_min(hist, today, hour_range, digits)
-                range_calcu = True
-                print('Range calculated')
-    except:
-        pass
+def hist_to_df():
+    global historical
+    historical = util.df(historical_0).set_index('date')
+    historical.drop(['volume','average','barCount'], axis = 1, inplace = True)
+    return(historical)
 
-# Function that calculates lots 
-def entry_lots():
-    global lots
-    if (range_calcu == True):
-        lots = ranguito.lots(account, risk, maxi, mini)
-        print('lots quantity calculated')
+## Range Calculation
+hour_range = pd.to_datetime(initial_hour) + timedelta(minutes = num_bars*temporality)
 
-lots = 20000
+def max_min_lots():
+    global allow_trading
+    global maximum, minimum, lots
+    maximum, minimum, lots = ranguito.max_and_min(historical, date, 5, account, risk)
 
-# Function that places stop bracket orders
-async def place_orders():
-    global b_buys, b_sells
+## Send Orders
+hour_orders = pd.to_datetime(hour_range) + timedelta(seconds = 1)
+
+def send_orders():
     global id_buy, id_sell
     global id_buy_entry, id_sell_entry
     global margin_entry_buy, margin_entry_sell
-    
-    if (maxi > 0 or mini > 0) and lots > 0:
-        #BUY-----------------
-        if not b_buys:
-            id_buy, orders_buy = ranguito.bracket_stop_order_send(ib, 'BUY', lots, contract, maxi, maxi + target, mini)
-            margin_entry_buy = float(ib.whatIfOrder(contract, orders_buy[0]).initMarginChange)
-            id_buy_entry = id_buy[0]
-            b_buys = True
-            print('Bracket stop buy order sent')
+    global orders_buy, orders_sell
+    id_buy, orders_buy, margin_entry_buy = ranguito.bracket_stop_order(ib, 'BUY', lots, contract, maximum, maximum + target, minimum)
+    id_buy_entry = id_buy[0]
+    id_sell, orders_sell, margin_entry_sell = ranguito.bracket_stop_order(ib, 'SELL', lots, contract, minimum, minimum - target, maximum)
+    id_sell_entry = id_sell[0]
 
-        #SELL--------------
-        if not b_sells:
-            id_sell, orders_sell = ranguito.bracket_stop_order_send(ib, 'SELL', lots, contract, mini, mini - target, maxi)
-            margin_entry_sell = float(ib.whatIfOrder(contract, orders_sell[0]).initMarginChange)
-            id_sell_entry = id_sell[0]
-            b_sells = True
-            print('Bracket stop sell order sent')
-
-# Function that gets entry price and commission
+## Entry Values
 def calc_entry_values():
-    global fills
     global entry_price_b, entry_price_s
     global commission_entry_buy, commission_entry_sell
-    
-    fills = ranguito.fills(ib)
-    try:
-        commission_entry_buy, entry_price_b = ranguito.order_values(fills, id_buy_entry, lots)
-        commission_entry_sell, entry_price_s = ranguito.order_values(fills, id_sell_entry, lots)
-    except:
-        pass
+    if pd.to_datetime(hour) > pd.to_datetime(str(hour_range)):
+        if historical['high'][-1] > maximum:
+            commission_entry_buy, entry_price_b = ranguito.order_values(util.tree(ib.fills()), id_buy_entry, lots)
+        if historical['low'][-1] < minimum:
+            commission_entry_sell, entry_price_s = ranguito.order_values(util.tree(ib.fills()), id_sell_entry, lots)
 
-# Function that calculates the required margin
-def calc_margin():
-    global margin_buy, margin_sell
-    
-    if entry_price_b > 0:
-        margin_buy = round(ranguito.required_margin('BUY', entry_price_b, lots),2)
-    if entry_price_s > 0:
-        margin_sell = round(ranguito.required_margin('SELL', entry_price_s, lots),2)
-
-# Function that gets exit price and commission
+## Exit Values
 def calc_exit_values():
     global exit_price_b, exit_price_s
     global commission_exit_buy, commission_exit_sell
     global profit_s, profit_b
-    global id_sell_exit, id_buy_exit
-    
-    if b_buys or b_sells:  
-        if id_buy[1] in nested_lookup('orderId',fills):
-            id_sell_exit = id_buy[1]
-        elif id_buy[2] in nested_lookup('orderId',fills):
-            id_sell_exit = id_buy[2]
-        if id_sell[1] in nested_lookup('orderId',fills):
-            id_buy_exit = id_sell[1]
-        elif id_sell[2] in nested_lookup('orderId',fills):
-            id_buy_exit = id_sell[2]
-        
-        #exit from sells
-        commission_exit_buy, exit_price_b, profit_s = ranguito.order_values(fills, id_buy_exit, lots, exit = True)
-        #exit from buys
-        commission_exit_sell, exit_price_s, profit_b = ranguito.order_values(fills, id_sell_exit, lots, exit = True)
+    if pd.to_datetime(hour) > pd.to_datetime(str(hour_range)) and id_sell_entry > 0:
+        id_list = [id_buy[1],id_buy[2],id_sell[1],id_sell[2]]
+        id_sell_exit, id_buy_exit = ranguito.filled_id(util.tree(ib.fills()), id_list)
+        if not sell_closed_by_time:
+            commission_exit_buy, exit_price_b, profit_s = ranguito.order_values(util.tree(ib.fills()), id_buy_exit, lots, True)
+        if not buy_closed_by_time:
+            commission_exit_sell, exit_price_s, profit_b = ranguito.order_values(util.tree(ib.fills()), id_sell_exit, lots, True)
 
-# Function that calculates the final profit in usd and ticks
+## Final Profit
 def calc_final_profit():
-    global final_profit_buy, final_profit_sell
-    global final_profit_buy_usd, final_profit_sell_usd
-    if (entry_price_b > 0) and (exit_price_s > 0):
-        final_profit_buy = round((exit_price_s - entry_price_b)/tick_val,0)
-        final_profit_buy_usd = round(((exit_price_s - entry_price_b) * lots) - commission_entry_buy - commission_exit_sell,2)
-    if (entry_price_s > 0) and (exit_price_b > 0):
-        final_profit_sell = round((entry_price_s - exit_price_b)/tick_val,0)
-        final_profit_sell_usd = round(((entry_price_s - exit_price_b) * lots) - commission_entry_sell - commission_exit_buy,2)
+    global profit_buy, profit_sell
+    if pd.to_datetime(hour) > pd.to_datetime(str(hour_range)):
+        if (entry_price_b > 0) and (exit_price_s > 0):
+            profit_buy = round(((exit_price_s - entry_price_b) * lots) - commission_entry_buy - commission_exit_sell,2)
+        if (entry_price_s > 0) and (exit_price_b > 0):
+            profit_sell = round(((entry_price_s - exit_price_b) * lots) - commission_entry_sell - commission_exit_buy,2)
 
-# Function that closes every open order
-async def close_all():
+## Close Orders
+def cancel_orders():
     global exit_price_b, exit_price_s
-    global commission_exit_buy, commission_exit_sell
-    global profit_s, profit_b
     global id_sell_exit, id_buy_exit
-    global cancel_orders
-    if (not valid_day or not valid_hour) and (b_buys or b_sells) and (not cancel_orders):
-        ib.reqGlobalCancel()
-        cancel_orders = True
-        if exit_price_b == 0 or exit_price_s == 0:
-            if ib.positions()[0].contract.symbol == inst:
-                open_lots = ib.positions()[0].position
-                if open_lots > 0:
-                    id_sell_exit, margin_sell_exit = ranguito.order_send(ib, 'SELL', abs(open_lots), contract)
-                    commission_exit_sell, exit_price_s, profit_b = ranguito.order_values(fills, id_sell_exit, lots, exit = True)
-                else:
-                    id_buy_exit, margin_buy_exit = ranguito.order_send(ib, 'BUY', abs(open_lots), contract)
-                    commission_exit_buy, exit_price_b, profit_s = ranguito.order_values(fills, id_buy_exit, lots, exit = True)
+    global buy_closed_by_time, sell_closed_by_time 
+    global commission_exit_buy, commission_exit_sell
+    
+    if(entry_price_b == 0):
+        ib.cancelOrder(orders_buy.parent)
+    else:
+        if(exit_price_s == 0):
+            ib.cancelOrder(orders_buy.stopLoss)
+            buy_closed_by_time = True
+            id_sell_exit, margin_sell_exit = ranguito.order_send(ib, 'SELL', lots, contract)
+            commission_exit_sell, exit_price_s, profit_b = ranguito.order_values(util.tree(ib.fills()), id_sell_exit, lots, True)
+    
+    if(entry_price_s == 0):
+        ib.cancelOrder(orders_sell.parent)
+    else:
+        if(exit_price_b == 0):
+            ib.cancelOrder(orders_sell.stopLoss)
+            sell_closed_by_time = True
+            id_buy_exit, margin_buy_exit = ranguito.order_send(ib, 'BUY', lots, contract)
+            commission_exit_buy, exit_price_b, profit_s = ranguito.order_values(util.tree(ib.fills()), id_buy_exit, lots, True)
 
-# Function that sends emails with entry and exit information
+## Send emails
 def sending_emails():
     global mail_buy_entry, mail_sell_entry, mail_buy_exit, mail_sell_exit
     #Mail for entries
-    if (entry_price_b > 0) and (mail_buy_entry == True):
+    if (entry_price_b > 0) and not mail_buy_entry:
         subject_entry_buy = 'Entry Buy Notification: Ranguito'
-        msg_entry_buy = 'Buy Market in ' + str(inst) + '\nPrice: ' + str(entry_price_b) + \
-                        '\nLots: ' + str(lots) + '\nAt: ' + str(hour) + \
-                        '\nReq.Margin: ' + str(margin_buy) + \
-                        '\nReq.Margin(ib): ' + str(margin_entry_buy)
+        msg_entry_buy = 'Buy Opened in ' + str(instrument) + '\nPrice: ' + str(entry_price_b) +                        '\nLots: ' + str(lots) + '\nReq.Margin(ib): ' + str(margin_entry_buy) +                        '\nAt: ' + str(hour)
         ranguito.send_email(subject_entry_buy, msg_entry_buy, mails)
-        mail_buy_entry = False
-    if (entry_price_s > 0) and (mail_sell_entry == True):  
+        mail_buy_entry = True
+    if (entry_price_s > 0) and not mail_sell_entry:  
         subject_entry_sell = 'Entry Sell Notification: Ranguito'
-        msg_entry_sell = 'Sell Market in ' + str(inst) + '\nPrice: ' + str(entry_price_s) + \
-                        '\nLots: ' + str(lots) + '\nAt: ' + str(hour) +  \
-                        '\nReq.Margin: ' + str(margin_sell) + \
-                        '\nReq.Margin(ib): ' + str(margin_entry_sell)
+        msg_entry_sell = 'Sell Opened in ' + str(instrument) + '\nPrice: ' + str(entry_price_s) +                         '\nLots: ' + str(lots) + '\nReq.Margin(ib): ' + str(margin_entry_sell) +                         '\nAt: ' + str(hour)
         ranguito.send_email(subject_entry_sell, msg_entry_sell, mails)
-        mail_sell_entry = False
+        mail_sell_entry = True
     
     #Mail for exits
-    if (mail_buy_entry == False) and (exit_price_s > 0) and (mail_buy_exit == True) :
+    if mail_buy_entry and (exit_price_s > 0) and not mail_buy_exit :
         subject_exit_buy = 'Exit Buy Notification: Ranguito'
-        msg_exit_buy = 'Buy Closed in ' + str(inst) + '\nPrice: ' + str(exit_price_s) +  \
-                        '\nProfit(ticks): ' + str(final_profit_buy) + \
-                        '\nProfit(USD): ' + str(final_profit_buy_usd) +  \
-                        '\nProfit(USD-ib): ' + str(profit_b) + \
-                        '\ncommissions: ' + str(commission_entry_buy + commission_exit_sell) + \
-                        '\nAt: ' + str(hour)
+        msg_exit_buy = 'Buy Closed in ' + str(instrument) + '\nPrice: ' + str(exit_price_s) +                       '\nProfit(USD): ' + str(profit_buy) +                       '\ncommissions: ' + str(commission_entry_buy + commission_exit_sell) +                       '\nAt: ' + str(hour)
         ranguito.send_email(subject_exit_buy, msg_exit_buy, mails)
-        mail_buy_exit = False
-    if (mail_sell_entry == False) and (exit_price_b > 0) and (mail_sell_exit == True) :
+        mail_buy_exit = True
+    if mail_sell_entry and (exit_price_b > 0) and not mail_sell_exit :
         subject_exit_sell = 'Exit Sell Notification: Ranguito'
-        msg_exit_sell = 'Sell Closed in ' + str(inst) + '\nPrice: ' + str(exit_price_b) + \
-                        '\nProfit(ticks): ' + str(final_profit_sell) + \
-                        '\nProfit(USD): ' + str(final_profit_sell_usd) +  \
-                        '\nProfit(USD-ib): ' + str(profit_s) + \
-                        '\ncommissions: ' + str(commission_entry_sell + commission_exit_buy) + \
-                        '\nAt: ' + str(hour)
+        msg_exit_sell = 'Sell Closed in ' + str(instrument) + '\nPrice: ' + str(exit_price_b) +                        '\nProfit(USD): ' + str(profit_sell) +                        '\ncommissions: ' + str(commission_entry_sell + commission_exit_buy) +                        '\nAt: ' + str(hour)
         ranguito.send_email(subject_exit_sell, msg_exit_sell, mails)
-        mail_sell_exit = False
+        mail_sell_exit = True
 
+## Scheduling Functions
+### - Each second Threading
+def back_1():
+    while True:
+        calc_times()
+        allowing_trading()
+        hist_to_df()
+        sleep(1)
+threading.Thread(name='background', target=back_1).start()
 
-# Background Execution
+### - Each ten seconds scheduler
 if __name__ == '__main__':
-
-    # Instantiating Schedulers
+    # Instantiating Scheduler
     sched = BackgroundScheduler()
     sched.start()
 
-    sched_async = AsyncIOScheduler()
-    sched_async.start()
-
-    sched.add_job(times,'interval', seconds=1)
-    sched.add_job(allowing_trading,'interval', seconds=1)
-    sched.add_job(convert_historical,trigger = 'cron', minute = '0-59/1', second = '01')
-    sched.add_job(calc_range,trigger = 'cron', hour = '8-22', minute = '0-59', second = '0-59/1')
-    #sched.add_job(entry_lots,trigger = 'cron', hour = '8-20', minute = '0-59', second = '0-59/1')
-    sched_async.add_job(place_orders,trigger = 'interval', seconds = 1)
-    #sched_async.add_job(place_orders,trigger = 'cron', minute = '0-59', second = '0-59/1')
-    sched.add_job(calc_entry_values,trigger = 'cron', hour = '8-22', minute = '0-59', second = '0-59/1')
-    sched.add_job(calc_margin,trigger = 'cron', hour = '8-22', minute = '0-59', second = '0-59/1')
-    sched.add_job(calc_exit_values,trigger = 'cron', hour = '8-22', minute = '0-59', second = '0-59/1')
-    sched.add_job(calc_final_profit,trigger = 'cron', hour = '8-22', minute = '0-59', second = '0-59/1')
-    sched_async.add_job(close_all,trigger = 'interval', seconds = 1)
-    sched.add_job(sending_emails, trigger = 'cron', hour = '8-22', minute = '0-59', second = '0-59/10')
+    ### - Fixed time
+    ib.schedule(pd.to_datetime(str(hour_range)), max_min_lots)
+    ib.schedule(pd.to_datetime(str(hour_orders)), send_orders)
+    ib.schedule(pd.to_datetime(final_hour), cancel_orders)
+    
+    ### - Continuous
+    sched.add_job(calc_entry_values,trigger = 'interval', seconds = 1)
+    sched.add_job(calc_exit_values,trigger = 'interval', seconds = 1)
+    sched.add_job(calc_final_profit,trigger = 'interval', seconds = 1)
+    sched.add_job(sending_emails,trigger = 'interval', seconds = 10)
 
     try:
         # This is here to simulate application activity (which keeps the main thread alive).
         while True:
             #ib.sleep(1)
-            #util.sleep(1)
-            asyncio.get_event_loop().run_forever()
+            util.sleep(1)
+            #asyncio.get_event_loop().run_forever()
     except (KeyboardInterrupt, SystemExit):
         # Not strictly necessary if daemonic mode is enabled but should be done if possible
-        scheduler.shutdown()
+        sched.shutdown()
